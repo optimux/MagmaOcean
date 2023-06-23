@@ -1,0 +1,2304 @@
+Command line:
+/skye/work/mzhang/schmeling/case4b/leaky/schmeling.tfml.build/build/schmeling -vINFO -l schmeling.tfml 
+
+Relevant environment variables:
+  none
+
+terraferma_options/
+  geometry/
+    dimension/
+      __value/
+       <value>: 2 
+        rank: 0
+    mesh::Mesh/
+      name: Mesh
+      source::File/
+        name: File
+        file/
+          __value/
+           <value>: square_refined_uni
+            type: filename
+            lines: 1
+        cell/
+          __value/
+           <value>: triangle
+            lines: 1
+  io/
+    output_base_name/
+      __value/
+       <value>: rb_melt_convection
+        lines: 1
+    visualization/
+      element::P2DG/
+        name: P2DG
+        family/
+          __value/
+           <value>: DG
+            lines: 1
+        degree/
+          __value/
+           <value>: 2 
+            rank: 0
+    dump_periods/
+      visualization_period/
+        __value/
+         <value>: 25 
+          rank: 0
+      statistics_period_in_timesteps/
+        __value/
+         <value>: 5 
+          rank: 0
+      detectors_period/
+        __value/
+         <value>: 50 
+          rank: 0
+    detectors/
+      point::z_tbl/
+        name: z_tbl
+        __value/
+         <value>: 0 0.928802 
+          rank: 1
+          shape: 2
+          dim1: dim
+      array::Array/
+        name: Array
+        python/
+          __value/
+           <value>: def val():
+  from numpy import arange
+  loc = [[0., y] for y in arange(0.0,1.0+1./1000.,1./100.)]
+  return loc
+            type: code
+            language: python3
+            lines: 20
+    checkpointing/
+      checkpoint_period/
+        __value/
+         <value>: 100 
+          rank: 0
+  timestepping/
+    current_time/
+      __value/
+       <value>: 0 
+        rank: 0
+    finish_time/
+      __value/
+       <value>: 10000 
+        rank: 0
+    timestep/
+      coefficient::Timestep/
+        name: Timestep
+        ufl_symbol::global/
+          name: global
+          __value/
+           <value>: dt
+            lines: 1
+        type::Constant/
+          name: Constant
+          rank::Scalar/
+            name: Scalar
+            rank: 0
+            value::WholeMesh/
+              name: WholeMesh
+              constant/
+                __value/
+                 <value>: 0.001 
+                  rank: 0
+      adaptive/
+        constraint::Courant/
+          name: Courant
+          system::CourantNumber/
+            name: CourantNumber
+          field::CourantNumber/
+            name: CourantNumber
+          requested_maximum_value/
+            __value/
+             <value>: 1 
+              rank: 0
+    steady_state/
+      tolerance/
+        __value/
+         <value>: 1e-09 
+          rank: 0
+  global_parameters/
+    ufl/
+      __value/
+       <value>: # Constant viscosities
+eta = 1.
+invzeta = 1.
+
+# deviatoric stress tensor
+edotd = sym(grad(v_i)) - div(v_i)*Identity(2)/3.
+#edotd = sym(grad(v_i)) - div(v_i)*Identity(2)/2.
+tau = 2.*eta*edotd
+
+#dimensionless fluid density
+rho_f = 0.9375
+#rho_f = 1.5
+drho = 1. - rho_f
+
+#Inverse Ra number 
+recRa = 1./Ra
+
+# time-stepping parameters (theta=1.0, backwards euler, 0.5: crank nicholson)
+theta = 0.5
+theta_v = 0.5
+
+
+# theta weighted parameters
+v_theta = theta_v*v_i + (1. - theta_v)*v_n
+vz_theta = theta_v*v_i[1] + (1. - theta_v)*v_n[1]
+T_theta = theta*T_i + (1. - theta)*T_n
+vT_i = (q_i + (1. - phi_i)*v_i)/(1. - phi_i*drho)
+vT_n = (q_n + (1. - phi_n)*v_n)/(1. - phi_n*drho)
+vT_theta = theta*vT_i + (1. - theta)*vT_n
+vTz_i = (q_i[1] + (1. - phi_i)*v_i[1])/(1. - phi_i*drho)
+vTz_n = (q_n[1] + (1. - phi_n)*v_n[1])/(1. - phi_n*drho)
+vTz_theta = theta*vTz_i + (1. - theta)*vTz_n
+
+#porosity and melting rate at a half-time step
+phi_theta = 0.5*(phi_i + phi_n)
+gamma_theta = 0.5*(gamma_i + gamma_n)
+# depletion
+fd_theta = 0.5*(fd_i + fd_n)
+
+# Melting rate parameters
+xc = SpatialCoordinate(gamma_e.cell())
+Tsol = 0.4 + 0.65*(1 - xc[1])
+# Material Derivative  of Temperature mixed solid-fluid frame
+DTdt = (T_i - T_n)/dt + inner(vT_theta, grad(T_theta))
+
+# Global parameters for porosity pressure residual 
+
+# permeability
+K = phi_i**n
+
+#inverse bulk viscosity function
+#Xi_i = hsquared*phi_i**m
+#Xi_n = hsquared*phi_n**m
+# m = 0
+Xi_i = hsquared
+Xi_n = hsquared 
+
+# auxiliary variables of porosity residual
+#outward facing facet normal for porosity cell
+phin = FacetNormal(phi_e.cell())
+# facet normal solid velocity
+vn = dot(v_theta, phin)
+# rectified normal solid velocity ( = vn if outflow, 0 if inflow)
+vnout = 0.5*(vn + abs(vn))
+
+# domains for assembly
+# top of fluid region
+ds_top   = ds(4)
+ds_bottom = ds(3)
+ds_left  = ds(1)
+ds_right = ds(2)
+ds_topfs = ds(4)
+        type: code
+        language: python3
+        lines: 20
+    dolfin/
+      ghost_mode::shared_facet/
+        name: shared_facet
+  system::Coupled/
+    name: Coupled
+    mesh::Mesh/
+      name: Mesh
+    ufl_symbol::global/
+      name: global
+      __value/
+       <value>: us
+        lines: 1
+    field::Velocity/
+      name: Velocity
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: v
+          lines: 1
+        comment: Solid velocity
+      type::Function/
+        name: Function
+        rank::Vector/
+          name: Vector
+          rank: 1
+          element::P2/
+            name: P2
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant::dim/
+              name: dim
+              __value/
+               <value>: 0 0 
+                rank: 1
+                shape: 2
+                dim1: dim
+          boundary_condition::LeftX/
+            name: LeftX
+            boundary_ids/
+              __value/
+               <value>: 1 
+                rank: 1
+                shape: 1
+            sub_components::X/
+              name: X
+              components/
+                __value/
+                 <value>: 0 
+                  rank: 1
+                  shape: 1
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+          boundary_condition::RightX/
+            name: RightX
+            boundary_ids/
+              __value/
+               <value>: 2 
+                rank: 1
+                shape: 1
+            sub_components::X/
+              name: X
+              components/
+                __value/
+                 <value>: 0 
+                  rank: 1
+                  shape: 1
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+          boundary_condition::BottomY/
+            name: BottomY
+            boundary_ids/
+              __value/
+               <value>: 3 
+                rank: 1
+                shape: 1
+            sub_components::Y/
+              name: Y
+              components/
+                __value/
+                 <value>: 1 
+                  rank: 1
+                  shape: 1
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+          boundary_condition::TopY/
+            name: TopY
+            boundary_ids/
+              __value/
+               <value>: 4 
+                rank: 1
+                shape: 1
+            sub_components::Y/
+              name: Y
+              components/
+                __value/
+                 <value>: 1 
+                  rank: 1
+                  shape: 1
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_steady_state/
+          norm/
+            __value/
+             <value>: linf
+              lines: 1
+        include_in_detectors: NULL
+    field::Pressure/
+      name: Pressure
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: p
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P1/
+            name: P1
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+          reference_point::Point/
+            name: Point
+            coordinates/
+              __value/
+               <value>: 0 0 
+                rank: 1
+                shape: 2
+                dim1: dim
+          zero_point::Point/
+            name: Point
+            coordinates/
+              __value/
+               <value>: 0 0 
+                rank: 1
+                shape: 2
+                dim1: dim
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+    field::Temperature/
+      name: Temperature
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: T
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P2/
+            name: P2
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            cpp/
+              rank: 0
+              members/
+                __value/
+                 <value>: double z1, z2;
+                  type: code
+                  language: cpp
+                  lines: 20
+              initialization/
+                __value/
+                 <value>: GenericFunction_ptr zi1_ptr, zi2_ptr;
+zi1_ptr = system()->fetch_coeff("zi1")->genericfunction_ptr(time());
+zi2_ptr = system()->fetch_coeff("zi2")->genericfunction_ptr(time());
+
+z1 = double(*std::dynamic_pointer_cast<dolfin::Constant>(zi1_ptr));
+z2 = double(*std::dynamic_pointer_cast<dolfin::Constant>(zi2_ptr));
+
+std::cout << "z1= " << z1 << " z2= " << z2 << '\n';
+                  type: code
+                  language: cpp
+                  lines: 20
+              eval/
+                __value/
+                 <value>: double z, Tzini;
+const double pi = 3.141592653589793;
+
+z = x[1];
+
+if ( z >= 0. && z <= z1)
+{
+  Tzini = 1. - 0.5*z/z1;
+} else if ( z > z1 && z<= z2 ) 
+{
+  Tzini = 0.5;
+} else if ( z > z2 && z <= 1.)
+{
+  Tzini = 0.5*(1. -  (z - z2)/(1. - z2) );
+}
+//std::cout <<  "z= " << z << " Tzini= " << Tzini <<  " z1= " << z1 << " z2= " << z2 <<'\n';
+values[0] = (Tzini + 0.1*std::cos(x[0]*pi)*std::sin(z*pi));
+                  type: code
+                  language: cpp
+                  lines: 20
+          boundary_condition::Top/
+            name: Top
+            boundary_ids/
+              __value/
+               <value>: 4 
+                rank: 1
+                shape: 1
+            sub_components::All/
+              name: All
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+          boundary_condition::Bottom/
+            name: Bottom
+            boundary_ids/
+              __value/
+               <value>: 3 
+                rank: 1
+                shape: 1
+            sub_components::All/
+              name: All
+              type::Dirichlet/
+                name: Dirichlet
+                type: boundary_condition
+                constant/
+                  __value/
+                   <value>: 1 
+                    rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_steady_state/
+          norm/
+            __value/
+             <value>: linf
+              lines: 1
+        include_in_detectors: NULL
+        include_previous_timestep_in_visualization: NULL
+    field::Gamma/
+      name: Gamma
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: gamma
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P1DG/
+            name: P1DG
+            family/
+              __value/
+               <value>: DG
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+    field::CompactionPressure/
+      name: CompactionPressure
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: pc
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P2/
+            name: P2
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+      comment: Compaction pressure  p = Xi Div(V)
+    field::Porosity/
+      name: Porosity
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: phi
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P2DG/
+            name: P2DG
+            family/
+              __value/
+               <value>: DG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            python/
+              rank: 0
+              __value/
+               <value>: def val(x):
+  import random
+  #uniform distribution in [0,1)
+  #leave this x here even if you don't use it
+  return random.uniform(0.0,0.3)
+                type: code
+                language: python3
+                lines: 20
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+      comment: scaled porosity f = phi/phi_0
+    field::MeltFlux/
+      name: MeltFlux
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: q
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Vector/
+          name: Vector
+          rank: 1
+          element::RT1/
+            name: RT1
+            family/
+              __value/
+               <value>: RT
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant::dim/
+              name: dim
+              __value/
+               <value>: 0 0 
+                rank: 1
+                shape: 2
+                dim1: dim
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+    field::Depletion/
+      name: Depletion
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: fd
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P2DG/
+            name: P2DG
+            family/
+              __value/
+               <value>: DG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+    field::Height/
+      name: Height
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: etah
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P1/
+            name: P1
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+    coefficient::Ra/
+      name: Ra
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: Ra
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 100000 
+                rank: 0
+      diagnostics: NULL
+    coefficient::Rm/
+      name: Rm
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: Rm
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: -1.5 
+                rank: 0
+      diagnostics: NULL
+    coefficient::Rd/
+      name: Rd
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: Rd
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 1.48 
+                rank: 0
+      diagnostics: NULL
+    coefficient::invSt/
+      name: invSt
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: invSt
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0.256016 
+                rank: 0
+              comment: 1./3.906
+      diagnostics: NULL
+    coefficient::zi1/
+      name: zi1
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: zi1
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0.047465 
+                rank: 0
+      diagnostics: NULL
+      comment: first vertical position for temperature initial condition
+    coefficient::zi2/
+      name: zi2
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: zi2
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0.952535 
+                rank: 0
+      diagnostics: NULL
+      comment: second vertical position for temperature initial condition
+    coefficient::delta_f/
+      name: delta_f
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: deltaf
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0.01 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+      comment: quadratic taper width for f
+    coefficient::fgradf/
+      name: fgradf
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: fgradf
+          lines: 1
+      type::Expression/
+        name: Expression
+        rank::Vector/
+          name: Vector
+          rank: 1
+          element::P2/
+            name: P2
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 2 
+                rank: 0
+            size/
+              __value/
+               <value>: 3 
+                rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            cpp/
+              rank: 1
+              members/
+                __value/
+                 <value>: GenericFunction_ptr T_ptr;
+double delta_f;
+                  type: code
+                  language: cpp
+                  lines: 20
+              initialization/
+                __value/
+                 <value>: T_ptr = system()->fetch_field("Temperature")->genericfunction_ptr(time());
+
+GenericFunction_ptr delta_f_ptr;
+delta_f_ptr = system()->fetch_coeff("delta_f")->genericfunction_ptr(time());
+
+delta_f = double(*std::dynamic_pointer_cast<dolfin::Constant>(delta_f_ptr));
+                  type: code
+                  language: cpp
+                  lines: 20
+              eval/
+                __value/
+                 <value>: //set melting function constants
+const double a = 0.4, b = 0.65;
+const double deltaT_liq = 0.4;
+const double c = std::sqrt(1. + b*b);
+const double norm_gradf = c/deltaT_liq;
+const double delta_r = delta_f/norm_gradf;
+const double r_liquidus = deltaT_liq/c;
+
+// set Tsolidus
+double z = x[1];
+double  Tsolidus = a + b*(1 - z);
+
+// evaluate Temperature (T) at point x 
+dolfin::Array<double> value(1);
+
+
+T_ptr->eval(value, x, cell);
+double T = value[0];
+
+//set orthogonal distance r from the solidus
+double r = (T - Tsolidus)/c;
+
+double f,dfdT,dfdz;
+if ( r < - delta_r)
+{
+   f = 0.;
+  dfdT = 0.;
+  dfdz = 0.;
+
+} 
+else if ( r >= -delta_r && r <= delta_r)
+{
+  f = norm_gradf/4./delta_r*(r + delta_r)*(r + delta_r);
+  dfdT = norm_gradf*(r + delta_r)/2./delta_r/c;
+  dfdz = b*dfdT;
+}
+else if ( r > delta_r && r  <= r_liquidus)
+{
+  f = ( T -  Tsolidus)/deltaT_liq;
+  dfdT = 1./deltaT_liq;
+  dfdz = b*dfdT;
+}
+else if ( r > r_liquidus )
+{
+  f = 1.;
+  dfdT = 0.;
+  dfdz = 0.;
+} 
+/* values[0] =  f; */
+/* values[1] = dfdT; */
+/* values[2] = dfdz; */
+values[0]=0.0;
+values[1]=0.0;
+values[2]=0.0;
+                  type: code
+                  language: cpp
+                  lines: 20
+                comment: return degree of melting and partial derivatives with respect to (T,z)
+really should be (T,P) but whatever
+      diagnostics/
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+      comment: batch degree of melting
+    coefficient::h_squared/
+      name: h_squared
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: hsquared
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 1000 
+                rank: 0
+      diagnostics: NULL
+      comment: (h/delta)**2...   the system size in compacition lengths (delta) squared
+    coefficient::FreezingRate/
+      name: FreezingRate
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: R
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics: NULL
+    coefficient::n/
+      name: n
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: n
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 3 
+                rank: 0
+      diagnostics: NULL
+      comment: exponent n in permeability K = phi**n
+    coefficient::m/
+      name: m
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: m
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics: NULL
+      comment: bulk viscosity exponent m,  such that the viscosity zeta = eta*phi^{- m}
+    coefficient::ghat/
+      name: ghat
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: ghat
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Vector/
+          name: Vector
+          rank: 1
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant::dim/
+              name: dim
+              __value/
+               <value>: 0 -1 
+                rank: 1
+                shape: 2
+                dim1: dim
+      diagnostics: NULL
+    coefficient::epsilon/
+      name: epsilon
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: epsilon
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0.01 
+                rank: 0
+              comment: (thermal expansivity)*(Delta T)
+      diagnostics: NULL
+    coefficient::UpUnit/
+      name: UpUnit
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: kup
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Vector/
+          name: Vector
+          rank: 1
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant::dim/
+              name: dim
+              __value/
+               <value>: 0 1 
+                rank: 1
+                shape: 2
+                dim1: dim
+              comment: upwards unit vector
+      diagnostics: NULL
+    coefficient::RhoExternal/
+      name: RhoExternal
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: rhoe
+          lines: 1
+      type::Constant/
+        name: Constant
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          value::WholeMesh/
+            name: WholeMesh
+            type: value
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics: NULL
+    nonlinear_solver::InitialSolve/
+      name: InitialSolve
+      type::SNES/
+        name: SNES
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: Fv = (inner(sym(grad(v_t)) , tau) - div(v_t)*p_i)*dx
+Fv += -v_t[1]*(T_i + Rm*fgradf[0] + Rd*fgradf[0]*(1. - fgradf[0]))*dx
+Fp = p_t*(div(v_i) - pc_i*invzeta)*dx
+FT= T_t*(T_i - T_n)*dx
+
+F = FT + Fv + Fp
+            type: code
+            language: python3
+            lines: 20
+          comment: just update Temperature with previous velocity field (but do semi-implicit diffusion) as initial guess
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: F
+              lines: 1
+        form::Jacobian/
+          name: Jacobian
+          rank: 1
+          __value/
+           <value>: J = derivative(F, us_i, us_a)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: J
+              lines: 1
+          ident_zeros: NULL
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        snes_type::ls/
+          name: ls
+          ls_type::cubic/
+            name: cubic
+          convergence_test::default/
+            name: default
+        relative_error/
+          __value/
+           <value>: 1e-07 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-08 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 5 
+            rank: 0
+        monitors/
+          residual: NULL
+        linear_solver/
+          iterative_method::fgmres/
+            name: fgmres
+            restart/
+              __value/
+               <value>: 30 
+                rank: 0
+            relative_error/
+              __value/
+               <value>: 1e-06 
+                rank: 0
+            absolute_error/
+              __value/
+               <value>: 1e-11 
+                rank: 0
+            max_iterations/
+              __value/
+               <value>: 100 
+                rank: 0
+            zero_initial_guess: NULL
+            monitors/
+              preconditioned_residual: NULL
+          preconditioner::fieldsplit/
+            name: fieldsplit
+            composite_type::multiplicative/
+              name: multiplicative
+            fieldsplit::Temperature/
+              name: Temperature
+              field::Temperature/
+                name: Temperature
+              monitors: NULL
+              linear_solver/
+                iterative_method::preonly/
+                  name: preonly
+                preconditioner::lu/
+                  name: lu
+                  factorization_package::mumps/
+                    name: mumps
+            fieldsplit::Stokes/
+              name: Stokes
+              field::Pressure/
+                name: Pressure
+              field::Velocity/
+                name: Velocity
+              monitors: NULL
+              linear_solver/
+                iterative_method::preonly/
+                  name: preonly
+                preconditioner::lu/
+                  name: lu
+                  factorization_package::mumps/
+                    name: mumps
+            fieldsplit::OtherVariables/
+              name: OtherVariables
+              monitors: NULL
+              linear_solver/
+                iterative_method::preonly/
+                  name: preonly
+                preconditioner::none/
+                  name: none
+        never_ignore_solver_failures: NULL
+      solve::at_start/
+        name: at_start
+    nonlinear_solver::InitialGuess/
+      name: InitialGuess
+      type::SNES/
+        name: SNES
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: #Melting Rate
+gamma_p = rho_f*(fgradf[1]*DTdt + fgradf[2]*vTz_n)
+gamma_sf = 0.5*(gamma_p + abs(gamma_p)) + 0.5*(gamma_p - abs(gamma_p))*phi_i
+# reactive freezing rate
+delta_Tsol = (T_i - Tsol)
+gamma_freeze = phi_i*R*0.5*(delta_Tsol - abs(delta_Tsol))
+
+FT = T_t*(1. + rho_f*invSt*fgradf[1])*(T_i - T_n + dt*inner(vT_n, grad(T_theta)))*dx
+FT +=  T_t*dt*invSt*(rho_f*vTz_n*fgradf[2] + gamma_freeze)*dx
+FT +=  dt*recRa*inner(grad(T_t), grad(T_theta))*dx
+
+FG = gamma_t*(gamma_i - gamma_sf - gamma_freeze)*dx
+
+# body integrals for porosity
+bfm = phi_t*(phi_i - phi_n - dt*((1.-phi_n)*pc_n + gamma_theta))
+# body integrals for advective integrals
+bfa = - dt*dot(grad(phi_t), v_theta*phi_theta) - dt*phi_t*div(v_theta)*phi_theta
+
+# all porosity body integrals
+bf = bfm + bfa
+
+# surface integrals over interior facets
+upwindfacetflux = vnout('+')*phi_theta('+') - vnout('-')*phi_theta('-')
+sffacet = dt*jump(phi_t)*upwindfacetflux
+
+# porosity residual
+Fphi =  bf*dx + sffacet*dS
+
+# depletion residual
+# body integrals for depletion
+bfdm = fd_t*(fd_i - fd_n - dt*gamma_theta/rho_f)
+# body integrals for advective integrals
+bfda = - dt*dot(grad(fd_t), v_theta*fd_theta) - dt*fd_t*div(v_theta)*fd_theta
+
+# all porosity body integrals
+bfd = bfdm + bfda
+
+# surface integrals over interior facets
+upwindfacetflux_fd = vnout('+')*fd_theta('+') - vnout('-')*fd_theta('-')
+sffacet_fd = dt*jump(fd_t)*upwindfacetflux_fd
+
+# porosity residual
+Fd =  bfd*dx + sffacet*dS
+# total Residual
+F = FT + FG + Fphi + Fd
+            type: code
+            language: python3
+            lines: 20
+          comment: just update Temperature with previous velocity field (but do semi-implicit diffusion) as initial guess
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: F
+              lines: 1
+        form::Jacobian/
+          name: Jacobian
+          rank: 1
+          __value/
+           <value>: J = derivative(F, us_i, us_a)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: J
+              lines: 1
+          ident_zeros: NULL
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        snes_type::vi/
+          name: vi
+          constraints/
+            upper_bound/
+              field::Porosity/
+                name: Porosity
+                constant/
+                  __value/
+                   <value>: 1 
+                    rank: 0
+              monitors: NULL
+            lower_bound/
+              field::Porosity/
+                name: Porosity
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+              monitors: NULL
+          convergence_test::default/
+            name: default
+        relative_error/
+          __value/
+           <value>: 1e-05 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-06 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 10 
+            rank: 0
+        monitors/
+          residual: NULL
+        linear_solver/
+          iterative_method::preonly/
+            name: preonly
+          preconditioner::lu/
+            name: lu
+            factorization_package::mumps/
+              name: mumps
+        ignore_all_solver_failures: NULL
+      solve::in_timeloop/
+        name: in_timeloop
+    nonlinear_solver::Solver/
+      name: Solver
+      type::SNES/
+        name: SNES
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: #Melting Rate
+gamma_p = rho_f*(fgradf[1]*DTdt + fgradf[2]*vTz_theta)
+gamma_sf = 0.5*(gamma_p + abs(gamma_p)) + 0.5*(gamma_p - abs(gamma_p))*phi_i
+# reactive freezing rate
+delta_Tsol = (T_i - Tsol)
+gamma_freeze = phi_i*R*0.5*(delta_Tsol - abs(delta_Tsol))
+
+#Free surface normal
+un = FacetNormal(v_e.cell())
+
+#First split is V,P,T
+#Fv = (inner(sym(grad(v_t)), tau) - div(v_t)*p_i)*dx#original
+#Fv += -v_t[1]*(T_i + Rm*phi_i + Rd*fd_i*(1. - phi_i))*dx#original
+#Fp = p_t*(div(v_i) - invzeta*pc_i)*dx#original case
+
+Fv = inner(sym(grad(v_t)), tau)*dx
+Fv += -inner(v_t, un)*(p_i + ((rhoe-1.0)*epsilon + T_i + Rm*phi_i + Rd*fd_i*(1.0-phi_i))*etah_i)*ds_topfs
+Fv += inner(v_t, grad(p_i))*dx
+Fv += -v_t[1]*(T_i + Rm*phi_i + Rd*fd_i*(1. - phi_i))*dx
+Fp = p_t*inner(v_i,un)*ds_topfs - inner(v_i, grad(p_t))*dx - p_t*pc_i*invzeta*dx
+FT = T_t*(1. + rho_f*invSt*fgradf[1])*(T_i - T_n + dt*inner(vT_theta, grad(T_theta)))*dx
+FT +=  T_t*dt*invSt*(rho_f*vTz_theta*fgradf[2] + gamma_freeze)*dx
+FT +=  dt*recRa*inner(grad(T_t), grad(T_theta))*dx
+
+# second split Gamma, phi, Pc
+FG = gamma_t*(gamma_i - gamma_sf - gamma_freeze)*dx
+
+#facet normal on compaction pressure
+pcn=FacetNormal(pc_e.cell())
+
+#surface integral terms from fluid flux, from Cian
+#spctop = -pc_t*Xi_i*inner(v_i, pcn)*phi_i#top melt impermeable ==> top free leaky surface (in bfb)
+spcbot = -pc_t*K*inner((grad(p_i) + Rm*ghat),pcn)#grad(pc_i).pcn=0, #bottom permeable
+
+# compaction pressure residual 
+Fpc = inner(grad(pc_t), K*(grad(pc_i) + grad(p_i) + Rm*ghat))*dx
+Fpc += pc_t*Xi_i*pc_i*dx + spcbot*ds_bottom# + spctop*ds_top 
+#Fpc += - pc_t*Xi_i*Rm*gamma_i/rho_f*dx
+
+# body integrals for porosity
+pc_theta = 0.5*((1. - phi_i)*pc_i + (1. - phi_n)*pc_n)
+bfm = phi_t*(phi_i - phi_n - dt*(pc_theta + gamma_theta))
+# body integrals for advective integrals
+bfa = - dt*dot(grad(phi_t), v_theta*phi_theta) - dt*phi_t*div(v_theta)*phi_theta
+
+# all porosity body integrals
+bf = bfm + bfa
+
+# surface integrals over physical boundaries
+bfb = dt*phi_t*phi_theta*0.5*(inner(v_theta, un) + abs(inner(v_theta, un)))
+
+# surface integrals over interior facets
+upwindfacetflux = vnout('+')*phi_theta('+') - vnout('-')*phi_theta('-')
+sffacet = dt*jump(phi_t)*upwindfacetflux
+# porosity residual
+Fphi =  bf*dx + sffacet*dS + bfb*ds_topfs
+
+# Almost last split melt flux
+Fq = inner(q_t,(q_i - phi_i*v_i +  K/hsquared*(grad(pc_i) + grad(p_i)+ Rm*ghat)))*dx
+
+# and depletion
+# body integrals for depletion
+bfdm = fd_t*(fd_i - fd_n - dt*gamma_theta/rho_f)
+# body integrals for advective integrals
+bfda = - dt*dot(grad(fd_t), v_theta*fd_theta) - dt*fd_t*div(v_theta)*fd_theta
+
+# all depletion  body integrals
+bfd = bfdm + bfda
+
+# surface integrals over interior facets
+upwindfacetflux_fd = vnout('+')*fd_theta('+') - vnout('-')*fd_theta('-')
+sffacet_fd = dt*jump(fd_t)*upwindfacetflux_fd
+
+# depletion residual
+Fd =  bfd*dx + sffacet_fd*dS
+
+#Surface motion residual
+Fetah = etah_t*theta*((etah_i - etah_n)/dt)*inner(kup, un)*ds_topfs
+Fetah += -etah_t*theta*inner(v_i, un)*ds_topfs
+
+# total scary residual
+F = Fv + Fp + FT + FG + Fpc + Fphi + Fq + Fd + Fetah
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: F
+              lines: 1
+        form::Jacobian/
+          name: Jacobian
+          rank: 1
+          __value/
+           <value>: J = derivative(F, us_i, us_a)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: J
+              lines: 1
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        snes_type::vi/
+          name: vi
+          constraints/
+            upper_bound/
+              field::Porosity/
+                name: Porosity
+                constant/
+                  __value/
+                   <value>: 1 
+                    rank: 0
+              monitors: NULL
+            lower_bound/
+              field::Porosity/
+                name: Porosity
+                constant/
+                  __value/
+                   <value>: 0 
+                    rank: 0
+              monitors: NULL
+          convergence_test::default/
+            name: default
+        relative_error/
+          __value/
+           <value>: 1e-07 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-09 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 50 
+            rank: 0
+        monitors/
+          residual: NULL
+        linear_solver/
+          iterative_method::preonly/
+            name: preonly
+          preconditioner::lu/
+            name: lu
+            factorization_package::mumps/
+              name: mumps
+        never_ignore_solver_failures: NULL
+      solve::in_timeloop/
+        name: in_timeloop
+    functional::VelocityL2NormSquared/
+      name: VelocityL2NormSquared
+      __value/
+       <value>: int = inner(v,v)*dx
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::TemperatureTopSurfaceIntegral/
+      name: TemperatureTopSurfaceIntegral
+      __value/
+       <value>: int = T.dx(1)*ds(4)
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::TemperatureBottomSurfaceIntegral/
+      name: TemperatureBottomSurfaceIntegral
+      __value/
+       <value>: int = T.dx(1)*ds(3)
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::GammaIntegral/
+      name: GammaIntegral
+      __value/
+       <value>: int = gamma_i*dx
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::CompactionPressureIntegral/
+      name: CompactionPressureIntegral
+      __value/
+       <value>: int = pc*dx
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::PorosityBottomIntegral/
+      name: PorosityBottomIntegral
+      __value/
+       <value>: #int = phi*dx
+int = phi*ds(3)
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+    functional::PorosityIntegral/
+      name: PorosityIntegral
+      __value/
+       <value>: int = phi*dx
+        type: code
+        language: python3
+        lines: 20
+      ufl_symbol::functional/
+        name: functional
+        __value/
+         <value>: int
+          lines: 1
+      form_representation::quadrature/
+        name: quadrature
+      quadrature_rule::default/
+        name: default
+      include_in_statistics: NULL
+  system::MeltVelocity/
+    name: MeltVelocity
+    mesh::Mesh/
+      name: Mesh
+    ufl_symbol::global/
+      name: global
+      __value/
+       <value>: uvf
+        lines: 1
+    field::MeltVelocity/
+      name: MeltVelocity
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: vf
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Vector/
+          name: Vector
+          rank: 1
+          element::RT1/
+            name: RT1
+            family/
+              __value/
+               <value>: RT
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant::dim/
+              name: dim
+              __value/
+               <value>: 0 0 
+                rank: 1
+                shape: 2
+                dim1: dim
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+        include_in_detectors: NULL
+    nonlinear_solver::Solver/
+      name: Solver
+      type::SNES/
+        name: SNES
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: F = inner(vf_t,(vf_i - v_i +  phi_i**(n-1)/hsquared*(grad(pc_i) + grad(p_i)+ Rm*ghat)))*dx
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: F
+              lines: 1
+        form::Jacobian/
+          name: Jacobian
+          rank: 1
+          __value/
+           <value>: J = derivative(F,uvf_i,uvf_a)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: J
+              lines: 1
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        snes_type::ls/
+          name: ls
+          ls_type::cubic/
+            name: cubic
+          convergence_test::default/
+            name: default
+        relative_error/
+          __value/
+           <value>: 1e-06 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-10 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 100 
+            rank: 0
+        monitors/
+          residual: NULL
+        linear_solver/
+          iterative_method::cg/
+            name: cg
+            relative_error/
+              __value/
+               <value>: 1e-07 
+                rank: 0
+            absolute_error/
+              __value/
+               <value>: 1e-10 
+                rank: 0
+            max_iterations/
+              __value/
+               <value>: 50 
+                rank: 0
+            zero_initial_guess: NULL
+            monitors/
+              preconditioned_residual: NULL
+          preconditioner::sor/
+            name: sor
+        never_ignore_solver_failures: NULL
+      solve::in_timeloop/
+        name: in_timeloop
+  system::Divergence/
+    name: Divergence
+    mesh::Mesh/
+      name: Mesh
+    ufl_symbol::global/
+      name: global
+      __value/
+       <value>: ud
+        lines: 1
+    field::Divergence/
+      name: Divergence
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: d
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P1/
+            name: P1
+            family/
+              __value/
+               <value>: CG
+                lines: 1
+            degree/
+              __value/
+               <value>: 1 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+    nonlinear_solver::Solver/
+      name: Solver
+      type::Picard/
+        name: Picard
+        preamble/
+          __value/
+           <value>: r = (d_t*d_a - d_t*div(v_i))*dx
+            type: code
+            language: python3
+            lines: 20
+        form::Bilinear/
+          name: Bilinear
+          rank: 1
+          __value/
+           <value>: a = lhs(r)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: a
+              lines: 1
+        form::Linear/
+          name: Linear
+          rank: 0
+          __value/
+           <value>: L = rhs(r)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: L
+              lines: 1
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: res = action(a, ud_i) - L
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: res
+              lines: 1
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        relative_error/
+          __value/
+           <value>: 1e-06 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-10 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 1 
+            rank: 0
+        monitors: NULL
+        linear_solver/
+          iterative_method::cg/
+            name: cg
+            relative_error/
+              __value/
+               <value>: 1e-06 
+                rank: 0
+            max_iterations/
+              __value/
+               <value>: 100 
+                rank: 0
+            nonzero_initial_guess: NULL
+            monitors/
+              preconditioned_residual: NULL
+          preconditioner::sor/
+            name: sor
+          monitors: NULL
+        ignore_all_solver_failures: NULL
+      solve::with_diagnostics/
+        name: with_diagnostics
+  system::CourantNumber/
+    name: CourantNumber
+    mesh::Mesh/
+      name: Mesh
+    ufl_symbol::global/
+      name: global
+      __value/
+       <value>: uc
+        lines: 1
+    field::CourantNumber/
+      name: CourantNumber
+      ufl_symbol::global/
+        name: global
+        __value/
+         <value>: c
+          lines: 1
+      type::Function/
+        name: Function
+        rank::Scalar/
+          name: Scalar
+          rank: 0
+          element::P0/
+            name: P0
+            family/
+              __value/
+               <value>: DG
+                lines: 1
+            degree/
+              __value/
+               <value>: 0 
+                rank: 0
+          initial_condition::WholeMesh/
+            name: WholeMesh
+            type: initial_condition
+            constant/
+              __value/
+               <value>: 0 
+                rank: 0
+      diagnostics/
+        include_in_visualization: NULL
+        include_in_statistics: NULL
+    nonlinear_solver::Solver/
+      name: Solver
+      type::Picard/
+        name: Picard
+        preamble/
+          __value/
+           <value>: cn = FacetNormal(c_e.cell())
+vn = dot(vf_i, cn)
+vout = 0.5*(vn + abs(vn))
+
+r = c_t*c_a*dx - c_t('+')*vout('+')*dt('+')*dS - c_t('-')*vout('-')*dt('-')*dS - c_t*vout*dt*ds(1) - c_t*vout*dt*ds(2) - c_t*vout*dt*ds(3) - c_t*vout*dt*ds(4)
+            type: code
+            language: python3
+            lines: 20
+          comment: set courant number with melt velocity
+        form::Bilinear/
+          name: Bilinear
+          rank: 1
+          __value/
+           <value>: a = lhs(r)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: a
+              lines: 1
+        form::Linear/
+          name: Linear
+          rank: 0
+          __value/
+           <value>: L = rhs(r)
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: L
+              lines: 1
+        form::Residual/
+          name: Residual
+          rank: 0
+          __value/
+           <value>: res = action(a, uc_i) - L
+            type: code
+            language: python3
+            lines: 20
+          ufl_symbol::solver/
+            name: solver
+            __value/
+             <value>: res
+              lines: 1
+        form_representation::quadrature/
+          name: quadrature
+        quadrature_rule::default/
+          name: default
+        relative_error/
+          __value/
+           <value>: 1e-06 
+            rank: 0
+        absolute_error/
+          __value/
+           <value>: 1e-16 
+            rank: 0
+        max_iterations/
+          __value/
+           <value>: 1 
+            rank: 0
+        monitors: NULL
+        linear_solver/
+          iterative_method::preonly/
+            name: preonly
+          preconditioner::jacobi/
+            name: jacobi
+          monitors: NULL
+        never_ignore_solver_failures: NULL
+      solve::with_diagnostics/
+        name: with_diagnostics
+Process 0: Computed global bounding box tree with 127 boxes.
+Attaching coeffs for system Coupled
+Attaching coeffs for system MeltVelocity
+Attaching coeffs for system Divergence
+Attaching coeffs for system CourantNumber
+Initializing fields and coefficient expressions for system Coupled
+z1= 0.047465 z2= 0.952535
+Initializing fields and coefficient expressions for system MeltVelocity
+Initializing fields and coefficient expressions for system Divergence
+Initializing fields and coefficient expressions for system CourantNumber
+Initializing coefficient functions for system Coupled
+Initializing coefficient functions for system MeltVelocity
+Initializing coefficient functions for system Divergence
+Initializing coefficient functions for system CourantNumber
+Evaluating initial fields for system Coupled
+Evaluating initial fields for system MeltVelocity
+Evaluating initial fields for system Divergence
+Evaluating initial fields for system CourantNumber
+Initializing matrices for system Coupled
+Initializing matrices for system MeltVelocity
+Initializing matrices for system Divergence
+Initializing matrices for system CourantNumber
+Bucket 
+  UFLSymbol R associated
+  UFLSymbol R_i associated
+  UFLSymbol R_n associated
+  UFLSymbol Ra associated
+  UFLSymbol Ra_i associated
+  UFLSymbol Ra_n associated
+  UFLSymbol Rd associated
+  UFLSymbol Rd_i associated
+  UFLSymbol Rd_n associated
+  UFLSymbol Rm associated
+  UFLSymbol Rm_i associated
+  UFLSymbol Rm_n associated
+  UFLSymbol T associated
+  UFLSymbol T_i associated
+  UFLSymbol T_n associated
+  UFLSymbol c associated
+  UFLSymbol c_i associated
+  UFLSymbol c_n associated
+  UFLSymbol d associated
+  UFLSymbol d_i associated
+  UFLSymbol d_n associated
+  UFLSymbol deltaf associated
+  UFLSymbol deltaf_i associated
+  UFLSymbol deltaf_n associated
+  UFLSymbol dt associated
+  UFLSymbol epsilon associated
+  UFLSymbol epsilon_i associated
+  UFLSymbol epsilon_n associated
+  UFLSymbol etah associated
+  UFLSymbol etah_i associated
+  UFLSymbol etah_n associated
+  UFLSymbol fd associated
+  UFLSymbol fd_i associated
+  UFLSymbol fd_n associated
+  UFLSymbol fgradf associated
+  UFLSymbol fgradf_i associated
+  UFLSymbol fgradf_n associated
+  UFLSymbol gamma associated
+  UFLSymbol gamma_i associated
+  UFLSymbol gamma_n associated
+  UFLSymbol ghat associated
+  UFLSymbol ghat_i associated
+  UFLSymbol ghat_n associated
+  UFLSymbol hsquared associated
+  UFLSymbol hsquared_i associated
+  UFLSymbol hsquared_n associated
+  UFLSymbol invSt associated
+  UFLSymbol invSt_i associated
+  UFLSymbol invSt_n associated
+  UFLSymbol kup associated
+  UFLSymbol kup_i associated
+  UFLSymbol kup_n associated
+  UFLSymbol m associated
+  UFLSymbol m_i associated
+  UFLSymbol m_n associated
+  UFLSymbol n associated
+  UFLSymbol n_i associated
+  UFLSymbol n_n associated
+  UFLSymbol p associated
+  UFLSymbol p_i associated
+  UFLSymbol p_n associated
+  UFLSymbol pc associated
+  UFLSymbol pc_i associated
+  UFLSymbol pc_n associated
+  UFLSymbol phi associated
+  UFLSymbol phi_i associated
+  UFLSymbol phi_n associated
+  UFLSymbol q associated
+  UFLSymbol q_i associated
+  UFLSymbol q_n associated
+  UFLSymbol rhoe associated
+  UFLSymbol rhoe_i associated
+  UFLSymbol rhoe_n associated
+  UFLSymbol uc associated
+  UFLSymbol uc_i associated
+  UFLSymbol uc_n associated
+  UFLSymbol ud associated
+  UFLSymbol ud_i associated
+  UFLSymbol ud_n associated
+  UFLSymbol us associated
+  UFLSymbol us_i associated
+  UFLSymbol us_n associated
+  UFLSymbol uvf associated
+  UFLSymbol uvf_i associated
+  UFLSymbol uvf_n associated
+  UFLSymbol v associated
+  UFLSymbol v_i associated
+  UFLSymbol v_n associated
+  UFLSymbol vf associated
+  UFLSymbol vf_i associated
+  UFLSymbol vf_n associated
+  UFLSymbol zi1 associated
+  UFLSymbol zi1_i associated
+  UFLSymbol zi1_n associated
+  UFLSymbol zi2 associated
+  UFLSymbol zi2_i associated
+  UFLSymbol zi2_n associated
+  Mesh Mesh (/geometry/mesh[0])
+  SystemBucket Coupled (/system[0])
+    FunctionBucket Velocity (/system[0]/field[0])
+    FunctionBucket Pressure (/system[0]/field[1])
+    FunctionBucket Temperature (/system[0]/field[2])
+    FunctionBucket Gamma (/system[0]/field[3])
+    FunctionBucket CompactionPressure (/system[0]/field[4])
+    FunctionBucket Porosity (/system[0]/field[5])
+    FunctionBucket MeltFlux (/system[0]/field[6])
+    FunctionBucket Depletion (/system[0]/field[7])
+    FunctionBucket Height (/system[0]/field[8])
+    FunctionBucket Ra (/system[0]/coefficient[0])
+    FunctionBucket Rm (/system[0]/coefficient[1])
+    FunctionBucket Rd (/system[0]/coefficient[2])
+    FunctionBucket invSt (/system[0]/coefficient[3])
+    FunctionBucket zi1 (/system[0]/coefficient[4])
+    FunctionBucket zi2 (/system[0]/coefficient[5])
+    FunctionBucket delta_f (/system[0]/coefficient[6])
+    FunctionBucket fgradf (/system[0]/coefficient[7])
+    FunctionBucket h_squared (/system[0]/coefficient[8])
+    FunctionBucket FreezingRate (/system[0]/coefficient[9])
+    FunctionBucket n (/system[0]/coefficient[10])
+    FunctionBucket m (/system[0]/coefficient[11])
+    FunctionBucket ghat (/system[0]/coefficient[12])
+    FunctionBucket epsilon (/system[0]/coefficient[13])
+    FunctionBucket UpUnit (/system[0]/coefficient[14])
+    FunctionBucket RhoExternal (/system[0]/coefficient[15])
+    SolverBucket InitialSolve (/system[0]/nonlinear_solver[0])
+      Form Residual (/system[0]/nonlinear_solver[0]/type/form[0])
+      Form Jacobian (/system[0]/nonlinear_solver[0]/type/form[1])
+    SolverBucket InitialGuess (/system[0]/nonlinear_solver[1])
+      Form Residual (/system[0]/nonlinear_solver[1]/type/form[0])
+      Form Jacobian (/system[0]/nonlinear_solver[1]/type/form[1])
+    SolverBucket Solver (/system[0]/nonlinear_solver[2])
+      Form Residual (/system[0]/nonlinear_solver[2]/type/form[0])
+      Form Jacobian (/system[0]/nonlinear_solver[2]/type/form[1])
+  SystemBucket MeltVelocity (/system[1])
+    FunctionBucket MeltVelocity (/system[1]/field[0])
+    SolverBucket Solver (/system[1]/nonlinear_solver[0])
+      Form Residual (/system[1]/nonlinear_solver[0]/type/form[0])
+      Form Jacobian (/system[1]/nonlinear_solver[0]/type/form[1])
+  SystemBucket Divergence (/system[2])
+    FunctionBucket Divergence (/system[2]/field[0])
+    SolverBucket Solver (/system[2]/nonlinear_solver[0])
+      Form Bilinear (/system[2]/nonlinear_solver[0]/type/form[0])
+      Form Linear (/system[2]/nonlinear_solver[0]/type/form[1])
+      Form Residual (/system[2]/nonlinear_solver[0]/type/form[2])
+  SystemBucket CourantNumber (/system[3])
+    FunctionBucket CourantNumber (/system[3]/field[0])
+    SolverBucket Solver (/system[3]/nonlinear_solver[0])
+      Form Bilinear (/system[3]/nonlinear_solver[0]/type/form[0])
+      Form Linear (/system[3]/nonlinear_solver[0]/type/form[1])
+      Form Residual (/system[3]/nonlinear_solver[0]/type/form[2])
+
+Solving for Divergence::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 0, 0
+
+Solving for CourantNumber::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 0, 0
+
+Solving for Coupled::InitialSolve using SNES
+In FormFunction
+  0 SNES Function norm 2.600340489154e-03 
+In FormJacobian
+    Residual norms for Coupled_InitialSolve_ solve.
+    0 KSP Residual norm 2.600340489154e-03 
+    1 KSP Residual norm 6.412632981775e-16 
+In FormFunction
+  1 SNES Function norm 1.361122463730e-15 
+Convergence for Coupled::InitialSolve
+SNESConvergedReason 2
+SNES n/o iterations 1
+SNES n/o linear solver iterations 1
+  KSPConvergedReason 3
+  KSP n/o iterations 1
+    KSPConvergedReason 4
+    KSP n/o iterations 1
+    KSPConvergedReason 4
+    KSP n/o iterations 1
+    KSPConvergedReason 4
+    KSP n/o iterations 1
+Solving for Divergence::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 6.45019e-19, 1
+
+Solving for CourantNumber::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 0, 0
+
+Entering timeloop.
+Timestep numbers: 0 -> 1
+Times: 0 -> 0.001
+Timestep: 0.001
+Solving for Coupled::InitialGuess using SNES
+In FormFunction
+  0 SNES Function norm 4.815774173523e-07 
+Convergence for Coupled::InitialGuess
+SNESConvergedReason 2
+SNES n/o iterations 0
+SNES n/o linear solver iterations 0
+  KSPConvergedReason 0
+  KSP n/o iterations 0
+Solving for Coupled::Solver using SNES
+In FormFunction
+  0 SNES Function norm 1.326826906133e-02 
+In FormJacobian
+Convergence for Coupled::Solver
+SNESConvergedReason -3
+SNES n/o iterations 0
+SNES n/o linear solver iterations 0
+  KSPConvergedReason -11
+  KSP n/o iterations 0
+Solving for MeltVelocity::Solver using SNES
+In FormFunction
+  0 SNES Function norm 1.370017166114e-03 
+In FormJacobian
+    Residual norms for MeltVelocity_Solver_ solve.
+    0 KSP Residual norm 2.384107427827e-03 
+    1 KSP Residual norm 1.412994439077e-04 
+    2 KSP Residual norm 1.921084054457e-05 
+    3 KSP Residual norm 3.112531008221e-06 
+    4 KSP Residual norm 6.491577960289e-07 
+    5 KSP Residual norm 1.319715167854e-07 
+    6 KSP Residual norm 3.180006049084e-08 
+    7 KSP Residual norm 7.175782421946e-09 
+    8 KSP Residual norm 1.631938282331e-09 
+    9 KSP Residual norm 3.242505597926e-10 
+   10 KSP Residual norm 6.393526543547e-11 
+In FormFunction
+  1 SNES Function norm 3.544007649442e-11 
+Convergence for MeltVelocity::Solver
+SNESConvergedReason 2
+SNES n/o iterations 1
+SNES n/o linear solver iterations 10
+  KSPConvergedReason 3
+  KSP n/o iterations 10
+Solving for Divergence::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 6.45019e-19, 1
+
+Solving for CourantNumber::Solver using Picard
+  0 Picard Residual Norm (absolute, relative) = 2.65132e-06, 1
+
+Convergence for CourantNumber::Solver
+KSPConvergedReason 4
+KSP n/o iterations 1
+  1 Picard Residual Norm (absolute, relative) = 2.76122e-22, 1.04145e-16
+
+Checkpointing simulation.
+Checkpointing simulation.
+In update_timestep()
+Finished timeloop.
